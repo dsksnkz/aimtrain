@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Aim Trainer</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #111; color: white; }
+        #ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: flex; flex-direction: column; align-items: center; }
+        #crosshair { position: absolute; top: 50%; left: 50%; width: 10px; height: 10px; border: 2px solid #0f0; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
+        #menu { pointer-events: auto; background: rgba(0,0,0,0.8); padding: 20px; border-radius: 10px; margin-top: 20vh; text-align: center; border: 1px solid #444; }
+        #stats { position: absolute; top: 20px; left: 20px; font-size: 18px; text-shadow: 2px 2px 2px black; }
+        button { background: #444; color: white; border: none; padding: 10px 20px; margin: 10px; cursor: pointer; border-radius: 5px; font-size: 16px; transition: 0.3s; }
+        button:hover { background: #666; }
+        #mode-indicator { position: absolute; top: 20px; right: 20px; font-size: 18px; color: #aaa; }
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <div id="crosshair"></div>
+        <div id="stats">Score: <span id="score">0</span></div>
+        <div id="mode-indicator">Mode: Normal</div>
+        
+        <div id="menu">
+            <h1>3D AIM TRAINER</h1>
+            <p>Click to Start. Use WASD to move (optional) and Mouse to aim.</p>
+            <button onclick="setMode('normal')">Normal Hitting Mode</button>
+            <button onclick="setMode('tracing')">Tracing Mode</button>
+            <p style="font-size: 12px; color: #888;">Press ESC to return to menu</p>
+        </div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+
+        // --- Configuration ---
+        let mode = 'normal'; // 'normal' or 'tracing'
+        let score = 0;
+        let isGameRunning = false;
+        const targetRadius = 0.5;
+        const spawnRange = { x: 10, y: 5, z: -10 };
+
+        // --- Scene Setup ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x222222);
+        scene.fog = new THREE.Fog(0x222222, 10, 50);
+
+        const camera = new THREE.PerspectiveCamera(90, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // --- Lighting ---
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        scene.add(ambientLight);
+        const sunLight = new THREE.DirectionalLight(0xffffff, 1);
+        sunLight.position.set(5, 10, 7.5);
+        scene.add(sunLight);
+
+        // --- Environment ---
+        const grid = new THREE.GridHelper(100, 50, 0x444444, 0x222222);
+        scene.add(grid);
+
+        // --- Pistol Model (Simple Shape) ---
+        const pistolGroup = new THREE.Group();
+        const bodyGeom = new THREE.BoxGeometry(0.1, 0.2, 0.5);
+        const bodyMat = new THREE.MeshPhongMaterial({ color: 0x333333 });
+        const body = new THREE.Mesh(bodyGeom, bodyMat);
+        
+        const gripGeom = new THREE.BoxGeometry(0.1, 0.3, 0.15);
+        const grip = new THREE.Mesh(gripGeom, bodyMat);
+        grip.position.set(0, -0.2, 0.15);
+        grip.rotation.x = Math.PI / 6;
+        
+        pistolGroup.add(body, grip);
+        pistolGroup.position.set(0.3, -0.4, -0.5);
+        camera.add(pistolGroup);
+        scene.add(camera);
+
+        // --- Controls ---
+        const controls = new PointerLockControls(camera, document.body);
+        const menu = document.getElementById('menu');
+
+        document.addEventListener('click', () => {
+            if (!isGameRunning) {
+                controls.lock();
+            } else if (mode === 'normal') {
+                shoot();
+            }
+        });
+
+        controls.addEventListener('lock', () => {
+            menu.classList.add('hidden');
+            isGameRunning = true;
+        });
+
+        controls.addEventListener('unlock', () => {
+            menu.classList.remove('hidden');
+            isGameRunning = false;
+        });
+
+        // --- Target Logic ---
+        let currentTarget = null;
+        let tracingHealth = 100;
+
+        function spawnTarget() {
+            if (currentTarget) scene.remove(currentTarget);
+
+            const geometry = new THREE.SphereGeometry(targetRadius, 32, 32);
+            const material = new THREE.MeshPhongMaterial({ color: mode === 'normal' ? 0xff4444 : 0x4444ff });
+            currentTarget = new THREE.Mesh(geometry, material);
+
+            currentTarget.position.x = (Math.random() - 0.5) * spawnRange.x;
+            currentTarget.position.y = 1 + Math.random() * spawnRange.y;
+            currentTarget.position.z = -5 - Math.random() * spawnRange.z;
+
+            // For tracing mode, add velocity
+            if (mode === 'tracing') {
+                currentTarget.userData.velocity = new THREE.Vector3(
+                    (Math.random() - 0.5) * 0.1,
+                    (Math.random() - 0.5) * 0.1,
+                    0
+                );
+            }
+
+            scene.add(currentTarget);
+        }
+
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2(0, 0); // Center of screen
+
+        function shoot() {
+            // Recoil animation
+            pistolGroup.position.z += 0.1;
+            pistolGroup.rotation.x -= 0.1;
+
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObject(currentTarget);
+
+            if (intersects.length > 0) {
+                score++;
+                document.getElementById('score').innerText = score;
+                spawnTarget();
+            }
+        }
+
+        window.setMode = (newMode) => {
+            mode = newMode;
+            score = 0;
+            document.getElementById('score').innerText = score;
+            document.getElementById('mode-indicator').innerText = `Mode: ${mode.charAt(0).toUpperCase() + mode.slice(1)}`;
+            spawnTarget();
+            controls.lock();
+        };
+
+        // --- Game Loop ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (isGameRunning) {
+                // Return pistol from recoil
+                pistolGroup.position.z += ( -0.5 - pistolGroup.position.z ) * 0.1;
+                pistolGroup.rotation.x += ( 0 - pistolGroup.rotation.x ) * 0.1;
+
+                if (currentTarget) {
+                    if (mode === 'tracing') {
+                        // Move target
+                        currentTarget.position.add(currentTarget.userData.velocity);
+                        
+                        // Bounce off boundaries
+                        if (Math.abs(currentTarget.position.x) > 8) currentTarget.userData.velocity.x *= -1;
+                        if (currentTarget.position.y > 6 || currentTarget.position.y < 0.5) currentTarget.userData.velocity.y *= -1;
+
+                        // Check tracing
+                        raycaster.setFromCamera(mouse, camera);
+                        const intersects = raycaster.intersectObject(currentTarget);
+                        if (intersects.length > 0) {
+                            tracingHealth -= 2;
+                            currentTarget.material.emissive.setHex(0xffffff);
+                            currentTarget.material.emissiveIntensity = 0.5;
+                        } else {
+                            currentTarget.material.emissiveIntensity = 0;
+                        }
+
+                        if (tracingHealth <= 0) {
+                            score++;
+                            document.getElementById('score').innerText = score;
+                            tracingHealth = 100;
+                            spawnTarget();
+                        }
+                    }
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // Handle Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        spawnTarget();
+        animate();
+    </script>
+</body>
+</html>
